@@ -1,11 +1,12 @@
 import pygame as pg
 import random
 import sys
+import os
 
 pg.init()
 WIDTH, HEIGHT = 900, 600
 screen = pg.display.set_mode((WIDTH, HEIGHT))
-pg.display.set_caption("大富豪（CPU複数枚出し 完全版）")
+pg.display.set_caption("大富豪（完全版）")
 clock = pg.time.Clock()
 
 font = pg.font.SysFont("meiryo", 24)
@@ -14,169 +15,155 @@ font = pg.font.SysFont("meiryo", 24)
 # カードの準備
 # -------------------------
 suits = ["♠", "♥", "♦", "♣"]
-ranks = list(range(3, 15))  # 3〜A
-rank_name = {11:"J", 12:"Q", 13:"K", 14:"A"}
+ranks = list(range(3, 16))  # 3〜2（15を2とする）
+rank_name = {11: "J", 12: "Q", 13: "K", 14: "A", 15: "2"}
+
 
 def card_to_text(card):
     s, r = card
     return f"{s}{r if r <= 10 else rank_name[r]}"
 
+
 def is_stronger(new_rank, base_rank, revolution):
-    """
-    革命時は強さが逆転するため、通常時と革命時で比較方法を変える
-     - 通常時：新しいランク > 場のランク
-     - 革命時：新しいランク < 場のランク
-     """
-    if not revolution:
-        return new_rank > base_rank
-    else:
-        return new_rank < base_rank # 革命中は強さが逆転
+    return new_rank > base_rank if not revolution else new_rank < base_rank
+
 
 def create_deck():
     deck = [(s, r) for s in suits for r in ranks]
     random.shuffle(deck)
     return deck
 
-# -------------------------
-# CPUの行動（複数枚出し対応）
-# -------------------------
-#<<<<<<< C0A24227/マーク縛り
-# def cpu_play(hand, field):
-#def cpu_play(hand, field, locked_suit):
-#=======
-def cpu_play(hand, field, revolution, locked_suit):
-    if len(hand) == 0:
-        return None
 
-    # ランクごとにまとめる
+def is_straight(cards):
+    if len(cards) < 2:
+        return False
+    ranks_ = sorted(c[1] for c in cards)
+    return all(ranks_[i] + 1 == ranks_[i + 1] for i in range(len(ranks_) - 1))
+
+
+def find_straights(hand):
+    straights = []
+    hand_sorted = sorted(hand, key=lambda c: c[1])
+
+    temp = [hand_sorted[0]]
+    for i in range(1, len(hand_sorted)):
+        if hand_sorted[i][1] == hand_sorted[i - 1][1] + 1:
+            temp.append(hand_sorted[i])
+        else:
+            if len(temp) >= 2:
+                straights.append(temp.copy())
+            temp = [hand_sorted[i]]
+
+    if len(temp) >= 2:
+        straights.append(temp.copy())
+
+    return straights
+
+
+# -------------------------
+# プレイヤーと同じ判定関数
+# -------------------------
+def can_play(selected, field, revolution, locked_suit):
+    is_st = is_straight(selected)
+    field_is_st = isinstance(field, list) and is_straight(field)
+
+    # マーク縛り中は階段禁止
+    if is_st and locked_suit is not None:
+        return False
+
+    # 場が複数枚 or 階段
+    if isinstance(field, list):
+
+        # 場が階段
+        if field_is_st:
+            if not is_st:
+                return False
+            if len(field) != len(selected):
+                return False
+            field_ranks = sorted(c[1] for c in field)
+            max_f = field_ranks[-1]
+            sel_ranks = sorted(c[1] for c in selected)
+            return sel_ranks[0] == max_f + 1
+
+        # 場が複数枚（同ランク）
+        else:
+            if is_st:
+                return False
+            ranks = [c[1] for c in selected]
+            if len(set(ranks)) != 1:
+                return False
+            if len(field) != len(selected):
+                return False
+            return is_stronger(selected[0][1], field[0][1], revolution)
+
+    # 場が1枚
+    elif isinstance(field, tuple):
+        if is_st:
+            return False
+        if len(selected) != 1:
+            return False
+        return is_stronger(selected[0][1], field[1], revolution)
+
+    # 場が流れている
+    else:
+        if not is_st and len(selected) >= 2:
+            ranks = [c[1] for c in selected]
+            if len(set(ranks)) != 1:
+                return False
+        return True
+
+
+# -------------------------
+# CPU が出せる全ての手を生成
+# -------------------------
+def generate_all_moves(hand):
+    moves = []
+
+    # 1枚
+    for c in hand:
+        moves.append([c])
+
+    # 複数枚
     groups = {}
     for c in hand:
         groups.setdefault(c[1], []).append(c)
+    for g in groups.values():
+        if len(g) >= 2:
+            moves.append(g.copy())
 
-    # -------------------------
-    # 場が流れている（自由に出せる）
-    # -------------------------
-    if field is None:
-        # 複数枚出し
-        multi = [g for g in groups.values() if len(g) >= 2]
+    # 階段
+    for s in find_straights(hand):
+        moves.append(s)
 
-        # マーク縛り中
-        if locked_suit is not None:
-            multi = [g for g in multi if all(c[0] == locked_suit for c in g)]
+    return moves
 
-        if multi:
-            play = (
-                min(multi, key=lambda g: g[0][1])
-                if not revolution
-                else max(multi, key=lambda g: g[0][1])
-            )
-            for c in play:
-                hand.remove(c)
-            return play
 
-        # 1枚出し
-        valid = hand
-        if locked_suit is not None:
-            valid = [c for c in hand if c[0] == locked_suit]
+# -------------------------
+# CPU（プレイヤーと完全同じ判定）
+# -------------------------
+def cpu_play(hand, field, revolution, locked_suit):
+    moves = generate_all_moves(hand)
 
-        if valid:
-            card = (
-                min(valid, key=lambda c: c[1])
-                if not revolution
-                else max(valid, key=lambda c: c[1])
-            )
-            hand.remove(card)
-            return card
+    legal = []
+    for m in moves:
+        if can_play(m, field, revolution, locked_suit):
+            legal.append(m)
 
+    if not legal:
         return None
 
-    # -------------------------
-    # 場が複数枚出し
-    # -------------------------
-    if isinstance(field, list):
-        need = len(field)
-        base_rank = field[0][1]
+    # CPU 戦略：最弱の手を出す（革命中は最強）
+    if not revolution:
+        best = min(legal, key=lambda mv: max(c[1] for c in mv))
+    else:
+        best = max(legal, key=lambda mv: max(c[1] for c in mv))
 
-        candidates = []
-        for r, g in groups.items():
-            if len(g) != need:
-                continue
-            if not is_stronger(r, base_rank, revolution):
-                continue
+    # 手札から削除
+    for c in best:
+        hand.remove(c)
 
-            # マーク縛り中
-            if locked_suit is not None:
-                if not all(c[0] == locked_suit for c in g):
-                    continue
+    return best if len(best) > 1 else best[0]
 
-            candidates.append(g)
-
-        if candidates:
-            play = (
-                min(candidates, key=lambda g: g[0][1])
-                if not revolution
-                else max(candidates, key=lambda g: g[0][1])
-            )
-            for c in play:
-                hand.remove(c)
-            return play
-
-        return None
-
-    # -------------------------
-    # 場が1枚出し
-    # -------------------------
-    base_rank = field[1]
-
-    valid = [c for c in hand if is_stronger(c[1], base_rank, revolution)]
-
-    # マーク縛り中
-    if locked_suit is not None:
-        valid = [c for c in valid if c[0] == locked_suit]
-
-    if valid:
-        card = (
-            min(valid, key=lambda c: c[1])
-            if not revolution
-            else max(valid, key=lambda c: c[1])
-        )
-        hand.remove(card)
-        return card
-
-    return None
-
-
-    # まず複数枚を優先
-    #multi = []
-    #for r, g in groups.items():
-        #if len(g) >= 2 and r > base_rank:
-            #multi.append(g)
-
-    #if multi:
-        #play = min(multi, key=lambda g: g[0][1])
-        #for c in play:
-            #hand.remove(c)
-        #return play
-
-    # 次に1枚出し
-    #valid = [c for c in hand if c[1] > base_rank]
-    #マーク縛り
-    #if locked_suit is not None:
-        #valid = [c for c in valid if c[0] == locked_suit]
-
-    #valid = [c for c in hand if is_stronger(c[1], base_rank, revolution)]
-    
-
-    # if valid:
-    #     card = (
-    #         min(valid, key=lambda c: c[1])
-    #         if not revolution
-    #         else max(valid, key=lambda c: c[1])
-    #         )# 革命時の処理
-    #     hand.remove(card)
-    #     return card
-
-    # return None
 
 # -------------------------
 # カード描画
@@ -200,9 +187,7 @@ def draw_card(x, y, card):
 
     return rect
 
-# -------------------------
-# プレイヤー手札（選択対応）
-# -------------------------
+
 def draw_player_hand(hand, selected_cards):
     rects = []
     for i, card in enumerate(hand):
@@ -218,6 +203,7 @@ def draw_player_hand(hand, selected_cards):
         rects.append((rect, card))
     return rects
 
+
 # -------------------------
 # ボタン
 # -------------------------
@@ -228,6 +214,7 @@ def draw_pass_button():
     screen.blit(font.render("PASS", True, (255, 255, 255)), (740, 470))
     return rect
 
+
 def draw_play_button():
     rect = pg.Rect(700, 380, 150, 60)
     pg.draw.rect(screen, (50, 150, 50), rect)
@@ -235,10 +222,12 @@ def draw_play_button():
     screen.blit(font.render("出す", True, (255, 255, 255)), (740, 400))
     return rect
 
+
 # -------------------------
 # リザルト画面
 # -------------------------
 rank_name_list = ["あなた", "CPU1", "CPU2", "CPU3"]
+
 
 def show_result_screen(finished):
     running = True
@@ -254,21 +243,21 @@ def show_result_screen(finished):
         screen.fill((20, 20, 20))
 
         title = font.render("GAME RESULT", True, (255, 255, 255))
-        screen.blit(title, (WIDTH//2 - title.get_width()//2, 80))
+        screen.blit(title, (WIDTH // 2 - title.get_width() // 2, 80))
 
         result = font.render(result_text, True, result_color)
-        screen.blit(result, (WIDTH//2 - result.get_width()//2, 140))
+        screen.blit(result, (WIDTH // 2 - result.get_width() // 2, 140))
 
         y = 220
         for i, p in enumerate(finished):
             text = font.render(f"{i+1}位：{rank_name_list[p]}", True, (255, 255, 255))
-            screen.blit(text, (WIDTH//2 - text.get_width()//2, y))
+            screen.blit(text, (WIDTH // 2 - text.get_width() // 2, y))
             y += 50
 
-        ok_rect = pg.Rect(WIDTH//2 - 75, 500, 150, 50)
+        ok_rect = pg.Rect(WIDTH // 2 - 75, 500, 150, 50)
         pg.draw.rect(screen, (80, 80, 200), ok_rect)
         pg.draw.rect(screen, (255, 255, 255), ok_rect, 3)
-        screen.blit(font.render("OK", True, (255, 255, 255)), (WIDTH//2 - 20, 515))
+        screen.blit(font.render("OK", True, (255, 255, 255)), (WIDTH // 2 - 20, 515))
 
         pg.display.update()
 
@@ -279,6 +268,7 @@ def show_result_screen(finished):
             if event.type == pg.MOUSEBUTTONDOWN:
                 if ok_rect.collidepoint(event.pos):
                     running = False
+
 
 # -------------------------
 # メインゲーム
@@ -297,14 +287,11 @@ def play_game():
         h.sort(key=lambda c: c[1])
 
     field = None
-
-    locked_suit = None #マーク縛り用
-
+    locked_suit = None
     message = ""
     finished = []
     selected_cards = []
-
-    revolution = False # 革命フラグ
+    revolution = False
 
     turn = 0
     last_player = 0
@@ -319,85 +306,42 @@ def play_game():
             if turn == 0 and event.type == pg.MOUSEBUTTONDOWN:
                 mx, my = event.pos
 
-                # 出すボタン
                 play_rect = draw_play_button()
                 if play_rect.collidepoint(mx, my):
 
-                    if len(selected_cards) == 0:
+                    if not selected_cards:
                         message = "カードを選択してください"
                         continue
 
-                    # 複数枚出し（同じ数字のみ）
-                    ranks = [c[1] for c in selected_cards]
-                    if len(set(ranks)) != 1:
-                        message = "同じ数字のカードだけ複数枚出せます"
+                    if not can_play(selected_cards, field, revolution, locked_suit):
+                        message = "そのカードは出せません"
                         continue
 
-                    # 場が複数枚出し
-                    if isinstance(field, list):
-                        if len(field) != len(selected_cards):
-                            message = "枚数が違います"
-                            continue
-                        if not is_stronger(selected_cards[0][1], field[0][1], revolution):
-                            message = "弱いです"
-                            continue
-
-                    # 場が1枚出し
-                    if isinstance(field, tuple):
-                        if len(selected_cards) != 1:
-                            message = "複数枚出しはできません（場が1枚）"
-                            continue
-                        if not is_stronger(selected_cards[0][1], field[1], revolution):
-                            message = "弱いです"
-                            continue
-                    
-                    if locked_suit is not None:
-                        if any(c[0] != locked_suit for c in selected_cards):
-                            message = "マーク縛り中です"
-                            continue
-                    
                     # 出す処理
                     for c in selected_cards:
                         hands[0].remove(c)
 
-                    if len(selected_cards) == 1:
-                        field = selected_cards[0]
-                    else:
-                        field = selected_cards.copy()
+                    field = selected_cards[0] if len(selected_cards) == 1 else selected_cards.copy()
 
-
-                    #マーク縛り更新
-                    if len(selected_cards) == 1:
-                        new_suit = selected_cards[0][0]
-                    else:
-                        new_suit = selected_cards[0][0]
-
-                    #場のマークを記録
+                    # マーク縛り更新
+                    new_suit = selected_cards[0][0]
                     if locked_suit is None:
                         locked_suit = new_suit
                     else:
-                        #マークが変わったら解除
                         if new_suit != locked_suit:
                             locked_suit = None
 
-                    # 革命判定
-                    if len(selected_cards) == 4:
+                    # 革命判定（4枚出し）
+                    if len(selected_cards) == 4 and not is_straight(selected_cards):
                         revolution = not revolution
-
-                        if revolution:
-                            message = "革命発動！ 強さが逆転した！"
-                        else:
-                            message = "革命返し！ 強さが元に戻った！"
-
+                        message = "革命発動！" if revolution else "革命返し！"
+                    else:
+                        message = "カードを出した"
 
                     selected_cards.clear()
                     last_player = 0
                     pass_count = 0
                     turn = 1
-
-                    if len(selected_cards) != 4:
-                        message = "カードを出した"
-                        
                     continue
 
                 # PASS
@@ -422,27 +366,21 @@ def play_game():
         # CPUターン
         if turn != 0:
 
-            if len(hands[turn]) == 0:
+            if not hands[turn]:
                 turn = (turn + 1) % 4
                 continue
 
             pg.time.wait(300)
 
-            # card = cpu_play(hands[turn], field)
-            #card = cpu_play(hands[turn], field, locked_suit)
-
-            card = cpu_play(hands[turn], field, revolution,locked_suit)
+            card = cpu_play(hands[turn], field, revolution, locked_suit)
 
             if card:
                 field = card
-                # 革命判定
-                if isinstance(card, list) and len(card) == 4:
-                    revolution = not revolution
 
-                    if revolution:
-                        message = "革命発動！"
-                    else:
-                        message = "革命返し！"
+                # 革命判定
+                if isinstance(card, list) and len(card) == 4 and not is_straight(card):
+                    revolution = not revolution
+                    message = "革命発動！" if revolution else "革命返し！"
 
                 if isinstance(card, list):
                     text = " ".join(card_to_text(c) for c in card)
@@ -452,6 +390,7 @@ def play_game():
 
                 last_player = turn
                 pass_count = 0
+
             else:
                 message = f"CPU{turn} はパスした"
                 pass_count += 1
@@ -461,17 +400,16 @@ def play_game():
         # 場流し
         if pass_count >= 3:
             field = None
+            locked_suit = None
             message = "場が流れた！"
             turn = last_player
             pass_count = 0
-            locked_suit = None #解除
 
         # 上がり判定
         for i in range(4):
-            if len(hands[i]) == 0 and i not in finished:
+            if not hands[i] and i not in finished:
                 finished.append(i)
 
-        # 3人上がったら終了
         if len(finished) == 3:
             for i in range(4):
                 if i not in finished:
@@ -483,27 +421,21 @@ def play_game():
         # 描画
         screen.fill((0, 120, 0))
 
-        # 革命表示
-        if revolution:
-            rev_text = font.render("革命中", True, (255, 50, 50))
-        else:
-            rev_text = font.render("通常", True, (255, 255, 255))
-
+        rev_text = font.render("革命中" if revolution else "通常", True, (255, 50, 50) if revolution else (255, 255, 255))
         screen.blit(rev_text, (700, 50))
 
-        # 場の描画
         if field:
             if isinstance(field, list):
-                x = WIDTH//2 - (len(field)*35)
+                x = WIDTH // 2 - (len(field) * 35)
                 for c in field:
-                    draw_card(x, HEIGHT//2 - 45, c)
+                    draw_card(x, HEIGHT // 2 - 45, c)
                     x += 70
             else:
-                draw_card(WIDTH//2 - 30, HEIGHT//2 - 45, field)
+                draw_card(WIDTH // 2 - 30, HEIGHT // 2 - 45, field)
 
         draw_player_hand(hands[0], selected_cards)
 
-        screen.blit(font.render(f"CPU1：{len(hands[1])}枚", True, (255, 255, 255)), (WIDTH//2 - 80, 30))
+        screen.blit(font.render(f"CPU1：{len(hands[1])}枚", True, (255, 255, 255)), (WIDTH // 2 - 80, 30))
         screen.blit(font.render(f"CPU2：{len(hands[2])}枚", True, (255, 255, 255)), (50, 150))
         screen.blit(font.render(f"CPU3：{len(hands[3])}枚", True, (255, 255, 255)), (WIDTH - 180, 150))
 
@@ -515,6 +447,7 @@ def play_game():
 
         pg.display.update()
         clock.tick(60)
+
 
 # -------------------------
 # 実行
