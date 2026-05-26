@@ -317,11 +317,40 @@ def play_game():
                         message = "そのカードは出せません"
                         continue
 
+
+                        #スキップ処理
+                    for i in range(len(selected_cards)): #出した札分繰り返す
+                        if(selected_cards[i][1] == 5) :  #出した札がすべて5だったら   
+                            i += 1
+                            field = selected_cards[0]
+
+                            if(len(selected_cards) <= 2): #出した札が2枚以下なら
+                                sk = len(selected_cards) + 1 - len(finished) #skはスキップ数で終了人数で変動する
+                            else:
+                                turn = 0 #elseだとまた自分のターン
+                                
+                        elif(selected_cards[i][1] == 13): #出した札がすべて5だったら
+                            i += 1
+                            field = selected_cards[0]
+
+                            if(len(selected_cards) <= 2): #出した札が2枚以下なら
+                                sk = len(selected_cards) + 1 - len(finished) #skはスキップ数で終了人数で変動する
+                            else:
+                                turn = 0 #elseだとまた自分のターン
+
+                            i = 0
+                            continue
+                            
+                        else:
+                            sk=0
+                            continue
+                    
                     # 出す処理
                     for c in selected_cards:
                         hands[0].remove(c)
 
                     field = selected_cards[0] if len(selected_cards) == 1 else selected_cards.copy()
+
 
                     # マーク縛り更新
                     new_suit = selected_cards[0][0]
@@ -337,6 +366,16 @@ def play_game():
                         message = "革命発動！" if revolution else "革命返し！"
                     else:
                         message = "カードを出した"
+                                        #スキップ時の処理
+                    if(sk >= 1): #skに数値が入った場合スキップ処理
+                        selected_cards.clear()
+                        last_player = 0
+                        pass_count = 0
+                        turn = sk
+                        message = "スキップ！"
+                        continue
+                    
+                    
 
                     #8切り
                     if selected_cards[0][1] == 8:
@@ -347,6 +386,7 @@ def play_game():
                         pass_count = 0
                         turn = 0 #8を出した人が次も先攻
                         continue
+
 
                     selected_cards.clear()
                     last_player = 0
